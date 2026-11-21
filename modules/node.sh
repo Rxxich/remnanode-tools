@@ -616,25 +616,38 @@ ask_node_version() {
     ok "Версия: ${C_B}remnawave/node:$NODE_VERSION${C_RST}"
 }
 
+INSTALL_VARS=(
+    EMAIL DOMAIN SECRET_KEY NODE_VERSION NODE_PORT PANEL_IP STEALTH BASE_NAME IMAGE_ALIAS
+    STUB_MODE SERVICE_NAME SERVICE_IMAGE SERVICE_PORT TEMPLATE_NAME APP_PORT XHTTP_PATH GRPC_PATH
+    VALIDATION_METHOD CA_SERVER CF_Token CERT_DNS CERT_NAME CERT_WILDCARD
+    WANT_CORE WANT_LOGS WANT_FW
+)
+
+install_back() { draft_keep install "${INSTALL_VARS[@]}"; }
+
+onoff() { if [ "${1:-yes}" = yes ]; then echo on; else echo off; fi; }
+
 action_install_node() {
     FW_PARAMS_ASKED=0
+    draft_load install
+    resolve_layout
     ui_screen "Установка Remnanode"
     note "Ответы сохраняются в $CONF_FILE — при повторном запуске они подставятся."
-    note "Esc на любом вопросе — назад в меню без изменений."
+    note "Esc на любом вопросе — назад в меню; уже введённое тоже запомнится."
     echo
-    ui_input EMAIL "Email для SSL" "${EMAIL:-}" valid_email "на него придут письма от центра сертификации" || { cfg_revert; return 0; }
-    ui_input DOMAIN "Домен ноды" "${DOMAIN:-}" valid_domain "например node.example.com" || { cfg_revert; return 0; }
-    ui_secret SECRET_KEY "SECRET_KEY из панели (Nodes → Add node)" valid_secret || { cfg_revert; return 0; }
+    ui_input EMAIL "Email для SSL" "${EMAIL:-}" valid_email "на него придут письма от центра сертификации" || { install_back; return 0; }
+    ui_input DOMAIN "Домен ноды" "${DOMAIN:-}" valid_domain "например node.example.com" || { install_back; return 0; }
+    ui_secret SECRET_KEY "SECRET_KEY из панели (Nodes → Add node)" valid_secret || { install_back; return 0; }
     echo
-    ask_node_version || { cfg_revert; return 0; }
+    ask_node_version || { install_back; return 0; }
     echo
-    ask_stealth || { cfg_revert; return 0; }
-    choose_stub || { cfg_revert; return 0; }
+    ask_stealth || { install_back; return 0; }
+    choose_stub || { install_back; return 0; }
     APP_PORT="${APP_PORT:-$DEFAULT_APP_PORT}"
 
     title "Транспорт"
-    ui_input XHTTP_PATH "XHTTP location path" "${XHTTP_PATH:-/xhttppath/}" valid_urlpath || { cfg_revert; return 0; }
-    ui_input GRPC_PATH "gRPC service name / path" "${GRPC_PATH:-/grpcpath}" valid_urlpath || { cfg_revert; return 0; }
+    ui_input XHTTP_PATH "XHTTP location path" "${XHTTP_PATH:-/xhttppath/}" valid_urlpath || { install_back; return 0; }
+    ui_input GRPC_PATH "gRPC service name / path" "${GRPC_PATH:-/grpcpath}" valid_urlpath || { install_back; return 0; }
     [[ "$XHTTP_PATH" != /* ]] && XHTTP_PATH="/$XHTTP_PATH"
     [[ "$XHTTP_PATH" != */ ]] && XHTTP_PATH="$XHTTP_PATH/"
     [[ "$GRPC_PATH" != /* ]] && GRPC_PATH="/$GRPC_PATH"
@@ -642,22 +655,22 @@ action_install_node() {
     title "Дополнительно"
     local opts
     ui_checklist opts "Что ещё сделать" \
-        "core|Кастомное ядро Xray (Jolymmiles)|on|бинарник подменяется томом, обновляется из меню" \
-        "logs|Логи Xray + logrotate|on|access/error-логи на хосте с ротацией" \
-        "fw|Firewall (ufw)|on|SSH, 80, 443 и порт ноды только для IP панели" || { cfg_revert; return 0; }
+        "core|Кастомное ядро Xray (Jolymmiles)|$(onoff "${WANT_CORE:-${CUSTOM_CORE:-}}")|бинарник подменяется томом, обновляется из меню" \
+        "logs|Логи Xray + logrotate|$(onoff "${WANT_LOGS:-${XRAY_LOGS:-}}")|access/error-логи на хосте с ротацией" \
+        "fw|Firewall (ufw)|$(onoff "${WANT_FW:-}")|SSH, 80, 443 и порт ноды только для IP панели" || { install_back; return 0; }
     WANT_CORE="no"; WANT_LOGS="no"; WANT_FW="no"
     [[ " $opts " == *" core "* ]] && WANT_CORE="yes"
     [[ " $opts " == *" logs "* ]] && WANT_LOGS="yes"
     [[ " $opts " == *" fw "* ]] && WANT_FW="yes"
     echo
     if [ "$WANT_FW" = "yes" ]; then
-        ask_firewall_params || { cfg_revert; return 0; }
+        ask_firewall_params || { install_back; return 0; }
     else
-        ui_input NODE_PORT "Порт Remnanode" "${NODE_PORT:-2222}" valid_port || { cfg_revert; return 0; }
+        ui_input NODE_PORT "Порт Remnanode" "${NODE_PORT:-2222}" valid_port || { install_back; return 0; }
     fi
 
     title "SSL"
-    cert_ask_method || { cfg_revert; return 0; }
+    cert_ask_method || { install_back; return 0; }
 
     CUSTOM_CORE="$WANT_CORE"
     XRAY_LOGS="$WANT_LOGS"
@@ -680,8 +693,9 @@ action_install_node() {
     ui_kv "Firewall" "$([ "$WANT_FW" = yes ] && echo "ufw, панель: ${PANEL_IP:-все}" || echo нет)"
     ui_box_bottom
     echo
-    ui_confirm "Начать установку?" y || { cfg_revert; return 0; }
+    ui_confirm "Начать установку?" y || { install_back; return 0; }
     cfg_save
+    draft_drop install
 
     echo
     printf '  %sНачинаю установку%s   %sлог: %s%s\n' "$C_B" "$C_RST" "$C_DIM" "$LOG_FILE" "$C_RST"

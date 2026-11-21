@@ -3,7 +3,7 @@
 KIT_NAME="remnanode-tools"
 KIT_CMD="rnt"
 KIT_NFT="remnanode_tools"
-KIT_VERSION="2.2.0"
+KIT_VERSION="2.2.1"
 KIT_REPO="${KIT_REPO:-Rxxich/remnanode-tools}"
 KIT_REF="${KIT_REF:-main}"
 
@@ -258,7 +258,7 @@ CFG_VARS=(
 )
 
 cfg_load() {
-    local f="$CONF_FILE"
+    local f="${1:-$CONF_FILE}"
     [ -f "$f" ] || return 0
     local own perm
     own=$(stat -c %u "$f" 2>/dev/null || echo 1)
@@ -291,6 +291,29 @@ cfg_revert() {
     for v in "${CFG_VARS[@]}"; do unset "$v"; done
     cfg_load
     resolve_layout
+    return 0
+}
+
+draft_file() { printf '%s/draft-%s.env' "$CONF_DIR" "$1"; }
+
+draft_load() { cfg_load "$(draft_file "$1")"; }
+
+draft_drop() { rm -f "$(draft_file "$1")"; }
+
+draft_keep() {
+    local name="$1" f v
+    f=$(draft_file "$name"); shift
+    local -A was=()
+    for v in "$@"; do was[$v]="${!v-}"; unset "$v"; done
+    cfg_revert
+    mkdir -p "$CONF_DIR"; chmod 700 "$CONF_DIR"
+    (
+        umask 077
+        for v in "$@"; do
+            [ "${was[$v]}" = "${!v-}" ] || printf '%s=%q\n' "$v" "${was[$v]}"
+        done >"$f"
+    )
+    [ -s "$f" ] || draft_drop "$name"
     return 0
 }
 
