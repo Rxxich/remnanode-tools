@@ -483,6 +483,100 @@ find_node_container() {
         | awk -v alias="${IMAGE_ALIAS:-}" '$2 ~ /remnawave\/node/ || (alias != "" && $2 == alias) {print $1; exit}' || true
 }
 
+compose_image() { sed -n 's/^[[:space:]]*image:[[:space:]]*//p' "$1" 2>/dev/null | head -n1 | tr -d "\"'"; }
+
+node_is_alias() { [ -n "${IMAGE_ALIAS:-}" ] && [ "$(compose_image "$NODE_DIR/docker-compose.yml")" = "$IMAGE_ALIAS" ]; }
+
+node_image_tag() {
+    local img
+    if node_is_alias; then echo "${NODE_VERSION:-latest}"; return 0; fi
+    img=$(compose_image "$NODE_DIR/docker-compose.yml"); img="${img##*/}"
+    if [[ "$img" == *:* ]]; then echo "${img##*:}"; else echo "latest"; fi
+}
+
+container_image_id() { docker inspect -f '{{.Image}}' "$1" 2>/dev/null; }
+image_date() { date -d "$(docker image inspect -f '{{.Created}}' "$1" 2>/dev/null)" +%d.%m.%Y 2>/dev/null; }
+
+_pull_nginx() { docker compose -f "$NGINX_DIR/docker-compose.yml" pull; }
+
+_pull_node() {
+    if node_is_alias; then
+        docker pull "remnawave/node:$1" && docker tag "remnawave/node:$1" "$IMAGE_ALIAS" || return 1
+        docker rmi "remnawave/node:$1" >/dev/null 2>&1
+        return 0
+    fi
+    docker compose -f "$NODE_DIR/docker-compose.yml" pull
+}
+
+_update_report() {
+    if [ "$4" = "fail" ]; then
+        err "$1: не обновлён — образ не скачался или контейнер не запустился. Подробности: $LOG_FILE"
+    elif [ -z "$3" ]; then
+        warn "$1: контейнер не запущен — проверь: docker ps -a"
+    elif [ "$2" = "$3" ]; then
+        ok "$1: уже последняя версия ${C_DIM}(образ от $(image_date "$3"))${C_RST}"
+    else
+        ok "$1: обновлён ${C_DIM}(образ от $(image_date "$3"))${C_RST}"
+        [ -n "$2" ] && docker rmi "$2" >/dev/null 2>&1 && note "старый образ $1 удалён"
+    fi
+    return 0
+}
+
+action_update_containers() {
+    ui_screen "Обновление Remnanode и nginx"
+    has docker || { err "Docker не установлен"; return 0; }
+    local ng=0 nd=0 tag="" img="" ng_img old_ng old_nd ng_rc=ok nd_rc=ok
+    [ -f "$NGINX_DIR/docker-compose.yml" ] && ng=1
+    if [ -f "$NODE_DIR/docker-compose.yml" ]; then
+        img=$(compose_image "$NODE_DIR/docker-compose.yml")
+        tag=$(node_image_tag)
+        case "$tag" in latest|dev) nd=1 ;; esac
+    fi
+    if [ "$ng" = 0 ] && [ -z "$img" ]; then
+        warn "Нода не установлена: нет $NODE_DIR/docker-compose.yml"
+        return 0
+    fi
+    ng_img=$(compose_image "$NGINX_DIR/docker-compose.yml")
+
+    ui_box_top "Что будет обновлено"
+    if [ "$ng" = 1 ]; then ui_kv "nginx" "$(ui_badge_ok "обновится")  ${C_DIM}${ng_img:-nginx}${C_RST}"
+    else ui_kv "nginx" "$(ui_badge_off "не найден")"
+    fi
+    if [ "$nd" = 1 ]; then
+        ui_kv "Remnanode" "$(ui_badge_ok "обновится")  ${C_DIM}remnawave/node:$tag${C_RST}"
+    elif [ -n "$img" ]; then
+        ui_kv "Remnanode" "$(ui_badge_off "не обновляется")  ${C_DIM}remnawave/node:$tag — закреплённая версия${C_RST}"
+    else
+        ui_kv "Remnanode" "$(ui_badge_off "не найдена")"
+    fi
+    ui_box_bottom
+    [ "$nd" = 1 ] && note "Если выйдет новый образ ноды, контейнер перезапустится: клиенты переподключатся за несколько секунд."
+    [ "$nd" = 0 ] && [ -n "$img" ] && note "Нода обновляется, только если в docker-compose у неё тег latest или dev."
+    echo
+    ui_confirm "Скачать свежие образы и перезапустить обновлённые контейнеры? Старые образы удалятся." y || return 0
+
+    old_ng=$(container_image_id "$NGINX_NAME")
+    old_nd=$(container_image_id "$NODE_NAME")
+    pb_init $(( ng * 8 + nd * 14 ))
+    if [ "$ng" = 1 ]; then
+        { stepf_try 5 "Загрузка образа nginx" _pull_nginx \
+          && step_try 3 "Запуск nginx на новом образе" "docker compose -f '$NGINX_DIR/docker-compose.yml' up -d"; } || ng_rc=fail
+    fi
+    if [ "$nd" = 1 ]; then
+        { stepf_try 10 "Загрузка образа remnawave/node:$tag" _pull_node "$tag" \
+          && step_try 4 "Запуск ноды на новом образе" "docker compose -f '$NODE_DIR/docker-compose.yml' up -d"; } || nd_rc=fail
+    fi
+    echo
+    [ "$ng" = 1 ] && _update_report "nginx" "$old_ng" "$(container_image_id "$NGINX_NAME")" "$ng_rc"
+    if [ "$nd" = 1 ]; then
+        sleep 3
+        _update_report "Remnanode" "$old_nd" "$(container_image_id "$NODE_NAME")" "$nd_rc"
+        [ "$(docker inspect -f '{{.State.Running}}' "$NODE_NAME" 2>/dev/null)" = "true" ] \
+            || warn "Нода не работает после обновления. Логи: docker logs --tail 50 $NODE_NAME"
+    fi
+    return 0
+}
+
 plan_install_weight() {
     local w=12
     has docker || w=$(( w + 25 ))

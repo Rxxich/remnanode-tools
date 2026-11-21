@@ -50,10 +50,11 @@ Esc работает везде. В мастере установки и защ�
 | IPv6 | включить или выключить, сохраняется после перезагрузки |
 | Оптимизация сервера | см. ниже |
 | Защита сервера | см. ниже, там же блок-листы |
+| Обновить Remnanode и nginx | скачать свежие образы и перезапустить обновлённые контейнеры. nginx обновляется всегда, нода — только если в её docker-compose тег `latest` или `dev`; закреплённая версия (например `2.8.0`) не трогается. Старые образы удаляются |
 | Обновить remnanode-tools | скачать свежую версию с GitHub. Если она новее установленной, у пункта виден значок `↑` с её номером |
 
 Команды без меню: `rnt install`, `rnt cert [status|renew|check]`, `rnt optimize [apply|status|rollback|xanmod]`,
-`rnt protect [apply|status|rollback|ssh|updates|crowdsec|lists]`, `rnt status`, `rnt update`, `rnt version`.
+`rnt protect [apply|status|rollback|ssh|updates|crowdsec|lists]`, `rnt status`, `rnt node-update`, `rnt update`, `rnt version`.
 
 SECRET_KEY вставляется как есть, длина не ограничена (ключи бывают 2–3 тысячи символов). Вместо ключа
 на экране счётчик символов, переносы строк из буфера обмена склеиваются, двойной Enter тоже работает.

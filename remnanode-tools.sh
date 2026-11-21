@@ -133,7 +133,8 @@ main_menu() {
             "-|сервер" \
             "opt|Оптимизация сервера|BBR, буферы по RAM, conntrack, лимиты, XanMod|$opt_badge" \
             "prot|Защита сервера|nftables, блок-листы, SSH, CrowdSec, автообновления|$prot_badge" \
-            "-|remnanode-tools" \
+            "-|обновления" \
+            "nupd|Обновить Remnanode и nginx|свежие образы: nginx всегда, нода — если в compose тег latest или dev|" \
             "update|Обновить remnanode-tools|$upd_desc|$upd_badge" \
             "quit|Выход||"
         [ -n "$c" ] && last="$c"
@@ -147,6 +148,7 @@ main_menu() {
             ipv6)    action_ipv6 ;;
             opt)     action_optimize_menu; continue ;;
             prot)    action_protect_menu; continue ;;
+            nupd)    action_update_containers ;;
             update)  kit_update menu ;;
             quit|"") echo; ok "Пока! Меню снова: ${C_B}$KIT_CMD${C_RST}"; exit 0 ;;
         esac
@@ -166,6 +168,7 @@ Debian 12 / 13 · Ubuntu 24.04
   $KIT_CMD protect  [apply|status|rollback|ssh|updates|crowdsec|lists]
   $KIT_CMD guard    allow|unallow|ban|unban|bans|status|lists IP…
   $KIT_CMD status                   сводка без меню
+  $KIT_CMD node-update              обновить образы nginx и ноды
   $KIT_CMD update                   обновить с GitHub
   $KIT_CMD version
 EOF
@@ -223,6 +226,7 @@ main() {
             [ -x "$GUARD_BIN" ] || die "Защита не установлена: $KIT_CMD protect apply"
             exec "$GUARD_BIN" "$@" ;;
         status)   show_server_info; guard_status ;;
+        node-update) action_update_containers ;;
         update)   kit_update ;;
         *) usage; exit 2 ;;
     esac
