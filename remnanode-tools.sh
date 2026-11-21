@@ -34,12 +34,26 @@ kit_link_commands() {
     return 0
 }
 
+KIT_LATEST=""; KIT_LATEST_DONE=0
+
 kit_version_of() { sed -n 's/^KIT_VERSION="\([0-9.]*\)".*/\1/p' | head -n1; }
+kit_version_gt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" = "$1" ]; }
+kit_ref() { if [ -f "$KIT_HOME/.ref" ]; then cat "$KIT_HOME/.ref"; else echo "${KIT_REF:-main}"; fi; }
 
 kit_remote_version() {
-    curl -fsSL --proto '=https' --max-time 15 \
+    curl -fsSL --proto '=https' --max-time "${2:-15}" \
         "https://raw.githubusercontent.com/$KIT_REPO/$1/lib/core.sh?t=$(date +%s)" 2>/dev/null | kit_version_of
 }
+
+kit_check_latest() {
+    [ "$KIT_LATEST_DONE" = 1 ] && return 0
+    KIT_LATEST_DONE=1
+    [ -d "$KIT_HOME/.git" ] && return 0
+    KIT_LATEST=$(kit_remote_version "$(kit_ref)" 4)
+    return 0
+}
+
+kit_has_update() { [ -n "$KIT_LATEST" ] && kit_version_gt "$KIT_LATEST" "$KIT_VERSION"; }
 
 kit_update() {
     ui_screen "Обновление remnanode-tools"
@@ -47,19 +61,23 @@ kit_update() {
         warn "$KIT_HOME — git-репозиторий: обнови его через git pull."
         return 0
     fi
-    local ref="${KIT_REF:-main}" tmp new rc
-    [ -f "$KIT_HOME/.ref" ] && ref=$(cat "$KIT_HOME/.ref")
+    local ref tmp new rc
+    ref=$(kit_ref)
     info "Проверяю ${C_B}$KIT_REPO${C_RST} @ ${C_B}$ref${C_RST}…"
     new=$(kit_remote_version "$ref")
+    [ -n "$new" ] && KIT_LATEST="$new"
     if [ -z "$new" ]; then
         warn "Не удалось узнать версию на GitHub"
         ui_confirm "Всё равно скачать и установить?" n || return 0
     elif [ "$new" = "$KIT_VERSION" ]; then
         ok "Уже стоит последняя версия ${C_B}$KIT_VERSION${C_RST}"
         ui_confirm "Переустановить её?" n || return 0
-    else
-        ok "На GitHub версия ${C_B}$new${C_RST}, установлена $KIT_VERSION"
+    elif kit_version_gt "$new" "$KIT_VERSION"; then
+        ok "Есть новая версия ${C_B}$new${C_RST}, установлена $KIT_VERSION"
         ui_confirm "Обновить $KIT_VERSION → $new?" y || return 0
+    else
+        warn "На GitHub версия $new — старше установленной $KIT_VERSION"
+        ui_confirm "Всё равно поставить $new?" n || return 0
     fi
     tmp=$(mktemp)
     if ! curl -fsSL --proto '=https' --max-time 30 "https://raw.githubusercontent.com/$KIT_REPO/$ref/install.sh?t=$(date +%s)" -o "$tmp"; then
@@ -79,11 +97,17 @@ kit_update() {
 }
 
 main_menu() {
-    local c core_label core_badge opt_badge prot_badge cert_b last="install" gen=-1
+    local c core_label core_badge opt_badge prot_badge cert_b upd_badge upd_desc last="install" gen=-1
     MENU_CACHE=$(mktemp)
     while true; do
         if [ "$gen" != "$KIT_GEN" ]; then
             { ui_logo; show_server_info; echo; } >"$MENU_CACHE"
+            kit_check_latest
+            upd_badge=""; upd_desc="скачать свежую версию с GitHub"
+            if kit_has_update; then
+                upd_badge=$(ui_badge_warn "↑ $KIT_LATEST")
+                upd_desc="есть новая версия $KIT_LATEST, установлена $KIT_VERSION"
+            fi
             if [ -n "$INFO_CORE_BIN" ]; then
                 core_label="Обновить ядро Xray (Jolymmiles)"
                 core_badge=""; [ -n "$INFO_CORE_UPDATE" ] && core_badge="$(ui_badge_warn "$INFO_CORE_UPDATE")"
@@ -110,7 +134,7 @@ main_menu() {
             "opt|Оптимизация сервера|BBR, буферы по RAM, conntrack, лимиты, XanMod|$opt_badge" \
             "prot|Защита сервера|nftables, блок-листы, SSH, CrowdSec, автообновления|$prot_badge" \
             "-|remnanode-tools" \
-            "update|Обновить remnanode-tools|скачать свежую версию с GitHub|" \
+            "update|Обновить remnanode-tools|$upd_desc|$upd_badge" \
             "quit|Выход||"
         [ -n "$c" ] && last="$c"
         case "$c" in

@@ -50,7 +50,7 @@ Esc работает везде. В мастере установки и защ�
 | IPv6 | включить или выключить, сохраняется после перезагрузки |
 | Оптимизация сервера | см. ниже |
 | Защита сервера | см. ниже, там же блок-листы |
-| Обновить remnanode-tools | скачать свежую версию с GitHub |
+| Обновить remnanode-tools | скачать свежую версию с GitHub. Если она новее установленной, у пункта виден значок `↑` с её номером |
 
 Команды без меню: `rnt install`, `rnt cert [status|renew|check]`, `rnt optimize [apply|status|rollback|xanmod]`,
 `rnt protect [apply|status|rollback|ssh|updates|crowdsec|lists]`, `rnt status`, `rnt update`, `rnt version`.
