@@ -759,7 +759,7 @@ guard_status() {
         ui_box_sep "CrowdSec"
         ui_kv "Агент" "$(systemctl is-active --quiet crowdsec && ui_badge_ok работает || ui_badge_err остановлен)"
         ui_kv "Bouncer" "$(systemctl is-active --quiet crowdsec-firewall-bouncer && ui_badge_ok работает || ui_badge_warn "не работает")  ${C_DIM}область: $(cs_scope_current)${C_RST}"
-        ui_kv "Решений" "$(cscli decisions list -a -o json 2>/dev/null | jq 'length' 2>/dev/null || echo ?)"
+        ui_kv "Баны" "$(cs_counts_label)"
     fi
     [ -f "$SSHD_DROPIN" ] && { ui_box_sep "SSH"; ui_kv "sshd" "$(ui_badge_ok "укреплён")  ${C_DIM}$SSHD_DROPIN${C_RST}"; }
     ui_box_bottom
@@ -876,12 +876,41 @@ action_ssh_harden() {
     return 0
 }
 
+uu_state() {
+    local v=""
+    has unattended-upgrade || return 0
+    systemctl is-enabled --quiet apt-daily-upgrade.timer 2>/dev/null || return 0
+    eval "$(apt-config shell v APT::Periodic::Unattended-Upgrade 2>/dev/null)"
+    case "$v" in ""|0) return 0 ;; esac
+    if [ -f "$UU_CONF" ]; then echo kit; else echo os; fi
+}
+
+uu_badge() {
+    case "$(uu_state)" in
+        kit) ui_badge_ok вкл ;;
+        os)  ui_badge_ok "вкл в ОС" ;;
+    esac
+}
+
 action_auto_updates() {
     ui_screen "Автообновления безопасности"
     note "Сервер сам ставит патчи безопасности (CVE). Docker и containerd исключены,"
     note "чтобы нода не перезапускалась сама; перезагрузки — только вручную."
     echo
-    ui_confirm "Включить автообновления безопасности?" y || return 0
+    local q="Включить автообновления безопасности?" d=y
+    case "$(uu_state)" in
+        kit)
+            ok "Уже включены и настроены remnanode-tools"
+            q="Применить настройки ещё раз?"; d=n ;;
+        os)
+            info "Уже включены в системе: так собран образ сервера (пакет unattended-upgrades)."
+            note "remnanode-tools добавит исключения docker и containerd и запретит автоперезагрузку."
+            q="Добавить эти настройки?" ;;
+        *)
+            info "Сейчас выключены" ;;
+    esac
+    echo
+    ui_confirm "$q" "$d" || return 0
     pb_init 6
     step 4 "Установка unattended-upgrades" "apt-get ${APT_OPTS[*]} install unattended-upgrades"
     cat >/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
@@ -889,7 +918,6 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
     cat >"$UU_CONF" <<'EOF'
-// remnanode-tools: обновления безопасности без перезапуска VPN
 Unattended-Upgrade::Package-Blacklist {
     "^docker-";
     "^docker\.io$";
@@ -940,7 +968,7 @@ action_protect_menu() {
             "lists|Блок-листы|госсети, СКИПА, сканеры, свои списки по ссылке, свои адреса|$bl_badge" \
             "crowdsec|CrowdSec|поведенческий IPS + общий список атакующих|$(has cscli && ui_badge_ok стоит)" \
             "ssh|Укрепить SSH|лимиты sshd, по желанию вход только по ключу|$([ -f "$SSHD_DROPIN" ] && ui_badge_ok да)" \
-            "updates|Автообновления безопасности|патчи CVE сами, docker не трогаем|$(systemctl is-enabled --quiet apt-daily-upgrade.timer 2>/dev/null && ui_badge_ok вкл)" \
+            "updates|Автообновления безопасности|патчи CVE сами, docker не трогаем|$(uu_badge)" \
             "-|управление" \
             "status|Состояние защиты|счётчики, баны, статистика блок-листов|" \
             "allow|Белый список|адреса, которые никогда не банятся и не блокируются|" \

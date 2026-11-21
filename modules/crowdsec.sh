@@ -219,32 +219,146 @@ EOF
     return 0
 }
 
-action_crowdsec() {
-    ui_screen "CrowdSec"
-    if has cscli; then
+cs_counts() {
+    cscli metrics show decisions -o json 2>/dev/null | jq -r '
+        [.decisions // {} | .[] | to_entries[] | {o: .key, n: ([.value[]] | add)}] as $d
+        | def total(f): [$d[] | select(f) | .n] | add // 0;
+        "\(total(.o == "crowdsec" or .o == "cscli")) \(total(.o == "CAPI")) \(total(.o == "lists"))"' 2>/dev/null
+}
+
+cs_counts_label() {
+    local own capi lists
+    read -r own capi lists <<<"$(cs_counts)"
+    [ -n "$own" ] || { echo "?"; return 0; }
+    printf '%s%s%s своих  %s·  общий список сообщества: %s' "$C_B" "$own" "$C_RST" "$C_DIM" "$capi"
+    [ "${lists:-0}" -gt 0 ] && printf '  ·  списки консоли: %s' "$lists"
+    printf '%s' "$C_RST"
+}
+
+cs_reason() {
+    case "${1#*/}" in
+        manual*)                  echo "вручную" ;;
+        ssh-bf*|ssh-slow-bf*)     echo "перебор пароля SSH" ;;
+        ssh-refused-conn)         echo "сканирование SSH" ;;
+        ssh-*)                    echo "атака на SSH" ;;
+        http-probing)             echo "сканирование сайта" ;;
+        http-crawl-non_statics)   echo "агрессивный обход сайта" ;;
+        http-bad-user-agent)      echo "сканер (User-Agent)" ;;
+        http-*bf*)                echo "перебор пароля на сайте" ;;
+        http-sensitive-files|http-backdoors-attempts|http-admin-interface-probing|http-wordpress*)
+                                  echo "поиск уязвимых файлов" ;;
+        http-path-traversal-probing|http-sqli-probing|http-xss-probing)
+                                  echo "попытка взлома сайта" ;;
+        *cve*|*CVE*)              echo "эксплойт CVE" ;;
+        *)                        ui_cut "${1#*/}" 25 ;;
+    esac
+}
+
+cs_left() {
+    local h=0 m=0
+    [[ "$1" =~ ([0-9]+)h ]] && h=${BASH_REMATCH[1]}
+    [[ "$1" =~ ([0-9]+)m([0-9]|$) ]] && m=${BASH_REMATCH[1]}
+    if [ "$h" -ge 48 ]; then echo "$(( h / 24 )) дн."
+    elif [ "$h" -gt 0 ]; then echo "$h ч $m мин"
+    elif [ "$m" -gt 0 ]; then echo "$m мин"
+    else echo "< 1 мин"
+    fi
+}
+
+cs_cols() {
+    local out="" s
+    while [ $# -gt 1 ]; do
+        _ui_pad s "$2" "$1"
+        [ "$UI_N" -ge "$1" ] && s+=" "
+        out+="$s"; shift 2
+    done
+    out+="$1"
+    _ui_cut s "$out" $(( UI_W - 6 ))
+    printf '%s' "$s"
+}
+
+action_cs_decisions() {
+    ui_screen "CrowdSec: решения"
+    local rows n ip cn sc left t res c own capi lists
+    rows=$(cscli decisions list -o json 2>/dev/null | jq -r '
+        .[]? | (.source.cn // "") as $cn | .decisions[]? | [.value, $cn, .scenario, .duration] | join("|")' 2>/dev/null)
+    n=$(grep -c . <<<"$rows")
+    if [ "$n" -gt 0 ]; then
+        ui_box_top "Сейчас забанены ($n)"
+        ui_box_line "${C_DIM}$(cs_cols 17 IP 7 страна 12 осталось причина)${C_RST}"
+        while IFS='|' read -r ip cn sc left; do
+            ui_box_line "$(cs_cols 17 "$ip" 7 "${cn:--}" 12 "$(cs_left "$left")" "$(cs_reason "$sc")")"
+        done < <(head -n 20 <<<"$rows")
+        [ "$n" -gt 20 ] && ui_box_line "${C_DIM}… и ещё $(( n - 20 )): cscli decisions list${C_RST}"
+        ui_box_bottom
+    else
+        ok "Сейчас CrowdSec никого не банит сам"
+    fi
+    echo
+    rows=$(cscli alerts list -l 15 -o json 2>/dev/null | jq -r '
+        .[]? | [.created_at, (.source.value // .source.ip // ""), (.source.cn // ""), .scenario,
+                (if .remediation then "бан" else "без бана" end)] | join("|")' 2>/dev/null)
+    if [ -n "$rows" ]; then
+        ui_box_top "Последние срабатывания"
+        ui_box_line "${C_DIM}$(cs_cols 13 когда 17 IP 7 страна 10 итог причина)${C_RST}"
+        while IFS='|' read -r t ip cn sc res; do
+            ui_box_line "$(cs_cols 13 "$(date -d "$t" '+%d.%m %H:%M' 2>/dev/null)" 17 "$ip" 7 "${cn:--}" 10 "$res" "$(cs_reason "$sc")")"
+        done <<<"$rows"
+        ui_box_bottom
+        echo
+    fi
+    read -r own capi lists <<<"$(cs_counts)"
+    note "Общий список сообщества: ${capi:-?} адр. (банит bouncer, здесь не показан)."
+    note "Полные списки: cscli decisions list, cscli alerts list."
+    [ "$n" -gt 0 ] || return 0
+    echo
+    ui_menu c "Действие" \
+        "unban|Разбанить IP|снять бан CrowdSec$(guard_active && echo " и защиты nftables")|" || return 0
+    ip=""
+    ui_input ip "IP" "" valid_ip_or_cidr || return 0
+    if guard_active && [[ "$ip" != */* ]]; then
+        "$GUARD_BIN" unban "$ip"
+    elif [[ "$ip" == */* ]]; then
+        cscli decisions delete --range "$ip" >/dev/null 2>&1; ok "Бан CrowdSec снят: $ip"
+    else
+        cscli decisions delete --ip "$ip" >/dev/null 2>&1; ok "Бан CrowdSec снят: $ip"
+    fi
+}
+
+cs_menu() {
+    local c=""
+    while true; do
+        ui_screen "CrowdSec"
         ui_box_top "CrowdSec"
         ui_kv "Агент" "$(systemctl is-active --quiet crowdsec && ui_badge_ok работает || ui_badge_err остановлен)  ${C_DIM}$(cscli version 2>/dev/null | awk -F': *' '/version/{print $2; exit}')${C_RST}"
         ui_kv "Bouncer" "$(systemctl is-active --quiet crowdsec-firewall-bouncer && ui_badge_ok работает || ui_badge_warn "не работает")"
         ui_kv "Область" "$(cs_scope_current)"
-        ui_kv "Решений" "$(cscli decisions list -a -o json 2>/dev/null | jq 'length' 2>/dev/null || echo ?)"
+        ui_kv "Баны" "$(cs_counts_label)"
         ui_box_bottom
         echo
-        local c
-        ui_menu c "CrowdSec" \
+        ui_menu c "CrowdSec" -d "$c" \
             "ssh|Область: только SSH|рекомендуется — не банит мобильных абонентов за CGNAT|" \
             "all|Область: все порты|баны и общий список на всех портах, включая 443|" \
             "nginx|Подключить логи nginx-прокси|сканеры сайта-заглушки → бан|" \
-            "wl|Обновить whitelist CrowdSec|панель, админ, белый список защиты|" || return 0
+            "wl|Обновить whitelist CrowdSec|панель, админ, белый список защиты|" \
+            "decisions|Решения|кого забанил CrowdSec, за что и на сколько, разбанить|" || return 0
         case "$c" in
-            ssh)   pb_init 4; stepf_try 4 "Область CrowdSec: только SSH" cs_scope_ssh && CS_SCOPE=ssh ;;
-            all)   pb_init 3; stepf_try 3 "Область CrowdSec: все порты" cs_scope_all; CS_SCOPE=all ;;
-            nginx) setup_crowdsec_nginx ;;
-            wl)    cs_write_whitelist; cs_reload >/dev/null && ok "Whitelist обновлён" ;;
+            ssh)       pb_init 4; stepf_try 4 "Область CrowdSec: только SSH" cs_scope_ssh && CS_SCOPE=ssh; cfg_save ;;
+            all)       pb_init 3; stepf_try 3 "Область CrowdSec: все порты" cs_scope_all; CS_SCOPE=all; cfg_save ;;
+            nginx)     setup_crowdsec_nginx ;;
+            wl)        cs_write_whitelist; cs_reload >/dev/null && ok "Whitelist обновлён" ;;
+            decisions) action_cs_decisions ;;
         esac
-        cfg_save
+        ui_done
+    done
+}
+
+action_crowdsec() {
+    if has cscli; then
+        cs_menu
         return 0
     fi
-
+    ui_screen "CrowdSec"
     note "CrowdSec разбирает логи sshd (и nginx), банит атакующих и получает общий"
     note "список вредоносных адресов от сообщества. Ставится из репозитория CrowdSec,"
     note "ключ проверяется по полному отпечатку."
