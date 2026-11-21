@@ -545,7 +545,7 @@ action_update_containers() {
     if [ "$nd" = 1 ]; then
         ui_kv "Remnanode" "$(ui_badge_ok "обновится")  ${C_DIM}remnawave/node:$tag${C_RST}"
     elif [ -n "$img" ]; then
-        ui_kv "Remnanode" "$(ui_badge_off "не обновляется")  ${C_DIM}remnawave/node:$tag — закреплённая версия${C_RST}"
+        ui_kv "Remnanode" "$(ui_badge_off "не обновляется")  ${C_DIM}remnawave/node:$tag — закреплена${C_RST}"
     else
         ui_kv "Remnanode" "$(ui_badge_off "не найдена")"
     fi

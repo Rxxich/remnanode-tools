@@ -3,7 +3,7 @@
 KIT_NAME="remnanode-tools"
 KIT_CMD="rnt"
 KIT_NFT="remnanode_tools"
-KIT_VERSION="2.2.1"
+KIT_VERSION="2.2.2"
 KIT_REPO="${KIT_REPO:-Rxxich/remnanode-tools}"
 KIT_REF="${KIT_REF:-main}"
 
