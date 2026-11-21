@@ -34,28 +34,48 @@ kit_link_commands() {
     return 0
 }
 
+kit_version_of() { sed -n 's/^KIT_VERSION="\([0-9.]*\)".*/\1/p' | head -n1; }
+
+kit_remote_version() {
+    curl -fsSL --proto '=https' --max-time 15 \
+        "https://raw.githubusercontent.com/$KIT_REPO/$1/lib/core.sh?t=$(date +%s)" 2>/dev/null | kit_version_of
+}
+
 kit_update() {
     ui_screen "Обновление remnanode-tools"
     if [ -d "$KIT_HOME/.git" ]; then
         warn "$KIT_HOME — git-репозиторий: обнови его через git pull."
         return 0
     fi
-    local ref="${KIT_REF:-main}" tmp
+    local ref="${KIT_REF:-main}" tmp new rc
     [ -f "$KIT_HOME/.ref" ] && ref=$(cat "$KIT_HOME/.ref")
-    info "Репозиторий ${C_B}$KIT_REPO${C_RST} @ ${C_B}$ref${C_RST}"
-    ui_confirm "Скачать и установить свежую версию?" y || return 0
+    info "Проверяю ${C_B}$KIT_REPO${C_RST} @ ${C_B}$ref${C_RST}…"
+    new=$(kit_remote_version "$ref")
+    if [ -z "$new" ]; then
+        warn "Не удалось узнать версию на GitHub"
+        ui_confirm "Всё равно скачать и установить?" n || return 0
+    elif [ "$new" = "$KIT_VERSION" ]; then
+        ok "Уже стоит последняя версия ${C_B}$KIT_VERSION${C_RST}"
+        ui_confirm "Переустановить её?" n || return 0
+    else
+        ok "На GitHub версия ${C_B}$new${C_RST}, установлена $KIT_VERSION"
+        ui_confirm "Обновить $KIT_VERSION → $new?" y || return 0
+    fi
     tmp=$(mktemp)
-    if ! curl -fsSL --proto '=https' --max-time 30 "https://raw.githubusercontent.com/$KIT_REPO/$ref/install.sh" -o "$tmp"; then
+    if ! curl -fsSL --proto '=https' --max-time 30 "https://raw.githubusercontent.com/$KIT_REPO/$ref/install.sh?t=$(date +%s)" -o "$tmp"; then
         rm -f "$tmp"; err "Не удалось скачать install.sh"; return 0
     fi
     KIT_REF="$ref" KIT_REPO="$KIT_REPO" KIT_DIR="$KIT_HOME" KIT_NO_RUN=1 bash "$tmp"
-    local rc=$?; rm -f "$tmp"
-    if [ "$rc" -eq 0 ]; then
-        ok "Готово — перезапускаю"
-        sleep 1
-        exec bash "$KIT_HOME/remnanode-tools.sh"
-    fi
-    err "Обновление не удалось (код $rc)"
+    rc=$?; rm -f "$tmp"
+    if [ "$rc" -ne 0 ]; then err "Обновление не удалось (код $rc)"; return 0; fi
+    new=$(kit_version_of <"$KIT_HOME/lib/core.sh")
+    ok "Установлена версия ${C_B}${new:-?}${C_RST}"
+    [ "${1:-}" = "menu" ] || return 0
+    note "Перезапускаю меню…"
+    sleep 1
+    ui_cleanup
+    [ -n "$MENU_CACHE" ] && rm -f "$MENU_CACHE"
+    exec bash "$KIT_HOME/remnanode-tools.sh"
 }
 
 main_menu() {
@@ -103,7 +123,7 @@ main_menu() {
             ipv6)    action_ipv6 ;;
             opt)     action_optimize_menu; continue ;;
             prot)    action_protect_menu; continue ;;
-            update)  kit_update ;;
+            update)  kit_update menu ;;
             quit|"") echo; ok "Пока! Меню снова: ${C_B}$KIT_CMD${C_RST}"; exit 0 ;;
         esac
         ui_done
