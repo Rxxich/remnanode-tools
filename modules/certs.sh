@@ -262,7 +262,7 @@ cert_ask_method() {
         "dns|DNS API провайдера (acme.sh)|Cloudflare, Gcore, Bunny, Selectel, Timeweb, Reg.ru, Beget, Yandex Cloud…; можно wildcard|" \
         "alpn|TLS-ALPN-01 на 8443 (acme.sh)|прежний способ; CA проверяет порт 443 — нужен проброс 443 → 8443|" \
         "cloudflare|Cloudflare DNS через certbot|прежний способ: certbot + API-токен Cloudflare|" \
-        "custom|Свой сертификат|готовые fullchain.pem и privkey.pem: проверю и поставлю|" || return 1
+        "custom|Свой сертификат|готовые сертификат и ключ (PEM): проверю и поставлю|" || return 1
     VALIDATION_METHOD="$m"
     CERT_NAME="$DOMAIN"; CERT_WILDCARD="no"; CERT_ENV=()
     case "$m" in
@@ -498,11 +498,26 @@ _cert_paste() {
     return 0
 }
 
+cert_custom_take() {
+    local base="$1" names=() e f; shift
+    for e in "$@"; do names+=("$base.$e"); done
+    f=$(cd "$CERT_CUSTOM_DIR" 2>/dev/null && ls -t "${names[@]}" 2>/dev/null | head -n1)
+    [ -n "$f" ] || return 0
+    [ "$f" != "$base.$1" ] && mv -f "$CERT_CUSTOM_DIR/$f" "$CERT_CUSTOM_DIR/$base.$1"
+    for e in "${@:2}"; do rm -f "$CERT_CUSTOM_DIR/$base.$e"; done
+    return 0
+}
+
+cert_custom_files() {
+    cert_custom_take fullchain pem crt cer
+    cert_custom_take privkey pem key
+}
+
 cert_custom_get() {
     local how crt="$CERT_CUSTOM_DIR/fullchain.pem" key="$CERT_CUSTOM_DIR/privkey.pem"
     mkdir -p "$CERT_CUSTOM_DIR"; chmod 700 "$CERT_CUSTOM_DIR"
     ui_menu how "Как передать свой сертификат" \
-        "upload|Загрузить файлы на сервер|fullchain.pem и privkey.pem через scp или SFTP|" \
+        "upload|Загрузить файлы на сервер|fullchain и privkey через scp или SFTP|" \
         "paste|Вставить текст в терминал|открыть файлы на компьютере, скопировать и вставить|" || return 1
     if [ "$how" = "paste" ]; then
         while true; do
@@ -516,21 +531,25 @@ cert_custom_get() {
     srv_detect_ip4
     echo
     ui_box_top "Куда положить файлы"
-    ui_kv "Сертификат" "$crt"
-    ui_kv "Ключ" "$key"
+    ui_kv "Папка" "$CERT_CUSTOM_DIR/"
+    ui_kv "Сертификат" "fullchain.pem  ${C_DIM}или fullchain.crt, fullchain.cer${C_RST}"
+    ui_kv "Ключ" "privkey.pem  ${C_DIM}или privkey.key${C_RST}"
     ui_box_bottom
     note "С компьютера, например:"
-    note "scp fullchain.pem privkey.pem root@${SRV_IP4:-IP_СЕРВЕРА}:$CERT_CUSTOM_DIR/"
-    note "В fullchain.pem — сам сертификат и за ним промежуточные; ключ без пароля."
+    note "scp fullchain.pem privkey.key root@${SRV_IP4:-IP_СЕРВЕРА}:$CERT_CUSTOM_DIR/"
+    note "Формат — текст PEM от -----BEGIN до -----END, расширение не важно."
+    note "В fullchain — сам сертификат и за ним промежуточные; ключ без пароля."
     echo
     while true; do
         ui_confirm "Файлы на месте — проверить?" y || return 1
+        cert_custom_files
         cert_verify "$crt" "$key" "$DOMAIN" && return 0
         echo
     done
 }
 
 cert_install_custom() {
+    cert_custom_files
     [ -s "$CERT_CUSTOM_DIR/fullchain.pem" ] && [ -s "$CERT_CUSTOM_DIR/privkey.pem" ] \
         || { err "Своего сертификата нет в $CERT_CUSTOM_DIR"; return 1; }
     mkdir -p "$NGINX_DIR"
@@ -733,7 +752,7 @@ action_cert_menu() {
         ui_menu c "SSL-сертификат" -d renew \
             "renew|Продлить сейчас|выпустить заново тем же способом и перезапустить nginx и ноду|" \
             "issue|Сменить способ / выпустить новый|HTTP-01, DNS API, TLS-ALPN, Cloudflare (certbot), свой|" \
-            "custom|Свой сертификат|загрузить или вставить fullchain.pem и privkey.pem, проверка и установка|" \
+            "custom|Свой сертификат|загрузить или вставить сертификат и ключ, проверка и установка|" \
             "check|Проверить автопродление|cron и способ у acme.sh, порт 80, пробный прогон certbot|" \
             "notify|Уведомления в Telegram|напоминание до конца срока и сообщение о продлении|" || return 0
         case "$c" in
